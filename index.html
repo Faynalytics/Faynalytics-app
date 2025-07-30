@@ -959,12 +959,13 @@
         let gisInited = false;
         let tokenClient;
         let googleAccessToken = null; 
+        let googleUserId = null; // Ajout pour stocker l'ID utilisateur Google
         // IMPORTANT: REPLACE THESE WITH YOUR ACTUAL GOOGLE CLOUD PROJECT CREDENTIALS
         const CLIENT_ID = '785515460632-mkritbmoj148ogofsvvndb1nsch8que2.apps.googleusercontent.com';
         const API_KEY = 'AIzaSyBjCi7NLfdJGcLGM3sWW5wGqRT58arVj6c';
 
         // Scopes define the permissions your app needs. For Google Drive, this is crucial.
-        const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile'; 
+        const SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/userinfo.profile'; 
         const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
 
         // Element references for auth/drive UI (initialized in DOMContentLoaded)
@@ -999,13 +1000,13 @@
             console.log('DOM Content Loaded. Initializing APIs...');
             
             // Initialize reference elements first
-            authorizeButton = document.getElementById('authorize_button');
-            signoutButton = document.getElementById('signout_button');
-            saveToDriveButton = document.getElementById('save_drive_button');
-            loadFromDriveButton = document.getElementById('load_drive_button');
-            userNameDisplay = document.getElementById('user_name_display');
-            driveStatus = document.getElementById('drive_status');
-            authErrorMessage = document.getElementById('auth_error');
+            authorizeButton = document.getElementById('authorizeButton');
+            signoutButton = document.getElementById('signoutButton');
+            saveToDriveButton = document.getElementById('saveToDriveButton');
+            loadFromDriveButton = document.getElementById('loadFromDriveButton');
+            userNameDisplay = document.getElementById('userNameDisplay');
+            driveStatus = document.getElementById('driveStatus');
+            authErrorMessage = document.getElementById('authErrorMessage');
 
             // Initialize Google API with retries
             const initializeApis = () => {
@@ -1103,13 +1104,13 @@
             console.log("maybeEnableButtons() called. gapiInited:", gapiInited, "gisInited:", gisInited);
             
             // Ensure all required elements are available
-            if (!authorizeButton) authorizeButton = document.getElementById('authorize_button');
-            if (!signoutButton) signoutButton = document.getElementById('signout_button');
-            if (!saveToDriveButton) saveToDriveButton = document.getElementById('save_drive_button');
-            if (!loadFromDriveButton) loadFromDriveButton = document.getElementById('load_drive_button');
-            if (!userNameDisplay) userNameDisplay = document.getElementById('user_name_display');
-            if (!driveStatus) driveStatus = document.getElementById('drive_status');
-            if (!authErrorMessage) authErrorMessage = document.getElementById('auth_error');
+            if (!authorizeButton) authorizeButton = document.getElementById('authorizeButton');
+            if (!signoutButton) signoutButton = document.getElementById('signoutButton');
+            if (!saveToDriveButton) saveToDriveButton = document.getElementById('saveToDriveButton');
+            if (!loadFromDriveButton) loadFromDriveButton = document.getElementById('loadFromDriveButton');
+            if (!userNameDisplay) userNameDisplay = document.getElementById('userNameDisplay');
+            if (!driveStatus) driveStatus = document.getElementById('driveStatus');
+            if (!authErrorMessage) authErrorMessage = document.getElementById('authErrorMessage');
 
             if (gapiInited && gisInited) {
                 console.log("Both GAPI and GIS clients are initialized. Attaching button listeners.");
@@ -1272,6 +1273,7 @@
                 });
                 if (response.ok) {
                     const userInfo = await response.json();
+                    googleUserId = userInfo.id || null; // Stocke l'ID utilisateur Google
                     if (userNameDisplay) userNameDisplay.textContent = `Welcome, ${userInfo.name}!`;
                     console.log("User info fetched:", userInfo);
                 } else {
@@ -1292,40 +1294,48 @@
             if (appFolderId) return appFolderId;
 
             try {
-                const response = await gapi.client.drive.files.list({
-                    q: `name='${APP_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+                console.log("Checking for existing app folder...");
+                const listResponse = await gapi.client.drive.files.list({
+                    q: "mimeType='application/vnd.google-apps.folder' and name='" + APP_FOLDER_NAME + "' and trashed=false",
                     fields: 'files(id, name)',
-                    spaces: 'drive',
+                    spaces: 'drive'
                 });
 
-                const files = response.result.files;
-                if (files.length > 0) {
+                const files = listResponse.result.files;
+                console.log("Found folders:", files);
+
+                if (files && files.length > 0) {
                     appFolderId = files[0].id;
-                    return appFolderId;
-                } else {
-                    const createResponse = await gapi.client.drive.files.create({
-                        resource: {
-                            name: APP_FOLDER_NAME,
-                            mimeType: 'application/vnd.google-apps.folder',
-                        },
-                        fields: 'id',
-                    });
-                    appFolderId = createResponse.result.id;
+                    console.log("Using existing folder:", appFolderId);
                     return appFolderId;
                 }
+
+                console.log("No existing folder found. Creating new folder...");
+                const createResponse = await gapi.client.drive.files.create({
+                    resource: {
+                        name: APP_FOLDER_NAME,
+                        mimeType: 'application/vnd.google-apps.folder'
+                    },
+                    fields: 'id, name'
+                });
+
+                if (!createResponse.result || !createResponse.result.id) {
+                    throw new Error("Failed to create folder - no ID returned");
+                }
+
+                appFolderId = createResponse.result.id;
+                console.log("Created new folder:", appFolderId);
+                return appFolderId;
             } catch (error) {
                 console.error('Error getting/creating app folder:', error);
-                showAuthError('Failed to access Google Drive folder.');
+                showAuthError('Failed to access or create Google Drive folder. Please check permissions.');
                 throw error;
             }
         }
 
         function getCurrentUserJournalFileName() {
-            if (googleAccessToken && gapi.client.getToken()) {
-                const token = gapi.client.getToken();
-                if (token && token.access_token) {
-                    return `faynalytics_journal_${token.access_token.substring(0, 8)}.json`;
-                }
+            if (googleUserId) {
+                return `faynalytics_journal_${googleUserId}.json`;
             }
             return 'faynalytics_journal_local.json'; 
         }
@@ -1362,36 +1372,61 @@
                 }
 
                 const fileContent = JSON.stringify(journalEntries);
-                const metadata = {
-                    'name': fileName,
-                    'mimeType': 'application/json',
-                    'parents': [folderId]
-                };
+                let metadata;
+                
+                if (fileId) {
+                    // For PATCH requests, don't include parents field
+                    metadata = {
+                        'name': fileName,
+                        'mimeType': 'application/json'
+                    };
+                } else {
+                    // For POST requests, include parents field
+                    metadata = {
+                        'name': fileName,
+                        'mimeType': 'application/json',
+                        'parents': [folderId]
+                    };
+                }
 
                 const form = new FormData();
                 form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
                 form.append('file', new Blob([fileContent], { type: 'application/json' }));
 
                 if (fileId) {
-                    await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
+                    const patchResponse = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
                         method: 'PATCH',
                         headers: {
                             'Authorization': `Bearer ${googleAccessToken}`
                         },
                         body: form
                     });
-                    driveStatus.textContent = `Journal sauvegardé sur Drive ! (${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})`;
-                    console.log("Journal saved to Google Drive.");
+                    if (patchResponse.ok) {
+                        driveStatus.textContent = `The Journal is Saved in the Drive  at (${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})`;
+                        console.log("Journal saved to Google Drive.");
+                    } else {
+                        const errorText = await patchResponse.text();
+                        console.error('Erreur lors de la sauvegarde (PATCH):', errorText);
+                        showAuthError('Échec de la sauvegarde du journal sur Google Drive. Permissions ou accès refusé.');
+                        driveStatus.textContent = 'Sauvegarde échouée.';
+                    }
                 } else {
-                    await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+                    const postResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
                         method: 'POST',
                         headers: {
                             'Authorization': `Bearer ${googleAccessToken}`
                         },
                         body: form
                     });
-                    driveStatus.textContent = `Journal créé et sauvegardé sur Drive ! (${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})`;
-                    console.log("Journal created and saved to Google Drive.");
+                    if (postResponse.ok) {
+                        driveStatus.textContent = `Journal créé et sauvegardé sur Drive ! (${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})`;
+                        console.log("Journal created and saved to Google Drive.");
+                    } else {
+                        const errorText = await postResponse.text();
+                        console.error('Erreur lors de la création (POST):', errorText);
+                        showAuthError('Échec de la création du journal sur Google Drive. Permissions ou accès refusé.');
+                        driveStatus.textContent = 'Sauvegarde échouée.';
+                    }
                 }
 
             } catch (error) {
@@ -1413,52 +1448,63 @@
                 return;
             }
 
-            driveStatus.textContent = 'Chargement depuis Drive...';
+            driveStatus.textContent = 'Loading from the Drive...';
             hideAuthError();
 
             try {
                 const folderId = await getAppFolderId();
                 const fileName = getCurrentUserJournalFileName();
 
+                console.log("Searching for file:", fileName, "in folder:", folderId);
                 const searchResponse = await gapi.client.drive.files.list({
                     q: `'${folderId}' in parents and name='${fileName}' and trashed=false`,
-                    fields: 'files(id)',
-                    spaces: 'drive',
+                    fields: 'files(id, name)',
+                    spaces: 'drive'
                 });
 
+                console.log("Search response:", searchResponse);
                 const existingFiles = searchResponse.result.files;
-                if (existingFiles.length > 0) {
+                console.log("Found files:", existingFiles);
+                
+                if (existingFiles && existingFiles.length > 0) {
                     const fileId = existingFiles[0].id;
-                    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-                        headers: { 'Authorization': `Bearer ${googleAccessToken}` }
+                    console.log("Found file ID:", fileId);
+                    const response = await gapi.client.drive.files.get({
+                        fileId: fileId,
+                        alt: 'media'
                     });
 
-                    if (response.ok) {
-                        const loadedData = await response.json();
-                        journalEntries = loadedData; 
-                        saveJournalEntriesLocallyOnly(); 
-                        applyFiltersAndSort(); 
-                        updatePerformanceGoalDisplay();
-                        driveStatus.textContent = `Journal chargé depuis Drive ! (${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})`;
-                        console.log("Journal loaded from Google Drive:", journalEntries);
+                    if (response.status === 200) {
+                        const loadedData = response.result;
+                        if (loadedData) {
+                            journalEntries = loadedData;
+                            saveJournalEntriesLocallyOnly();
+                            applyFiltersAndSort();
+                            updatePerformanceGoalDisplay();
+                            driveStatus.textContent = `Journal loaded from Google Drive at (${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})`;
+                            console.log("Journal loaded from Google Drive:", journalEntries);
+                        } else {
+                            console.error('No data in response');
+                            showAuthError('Le journal est vide sur Google Drive.');
+                            driveStatus.textContent = 'Chargement échoué - Fichier vide';
+                        }
                     } else {
-                        console.error('Échec du téléchargement du fichier depuis Drive:', response.statusText);
+                        console.error('Échec du téléchargement du fichier depuis Drive:', response.status);
                         showAuthError('Échec du chargement du journal depuis Google Drive.');
                         driveStatus.textContent = 'Chargement échoué.';
                     }
                 } else {
-                    driveStatus.textContent = 'Aucun fichier de journal trouvé sur Drive. Début à zéro.';
+                    driveStatus.textContent = 'No journal files found on Drive. Starting from scratch.';
                     journalEntries = []; 
                     saveJournalEntriesLocallyOnly(); 
                     applyFiltersAndSort();
                     updatePerformanceGoalDisplay();
                     console.log("No journal file found in Google Drive. Initializing empty journal.");
                 }
-
             } catch (error) {
-                console.error('Erreur lors du chargement du journal depuis Drive:', error);
-                showAuthError('Échec du chargement du journal depuis Google Drive. Vérifiez les permissions ou réessayez.');
-                driveStatus.textContent = 'Chargement échoué.';
+                console.error('Error loading the journal from Google Drive:', error);
+                showAuthError('Failed to load the journal from Google Drive. Please try again.');
+                driveStatus.textContent = 'Loading failed.';
             }
         }
 
@@ -1483,7 +1529,13 @@
         function saveJournalEntries() { 
             saveJournalEntriesLocallyOnly();
             if (googleAccessToken) {
-                saveJournalToDrive();
+                if (!googleUserId) {
+                    fetchUserInfo().then(() => {
+                        saveJournalToDrive();
+                    });
+                } else {
+                    saveJournalToDrive();
+                }
             }
         }
 
@@ -1497,21 +1549,39 @@
 
         // --- Position Size Calculator Functions ---
         function updateSLInputVisibility() {
+            console.log("updateSLInputVisibility called");
             const stopLossMethod = document.getElementById('stopLossInputMethod')?.value;
-            const pipsInputSection = document.getElementById('stopLossPipsSection');
-            const priceInputSection = document.getElementById('stopLossPriceSection');
+            // CORRECTED: Use the correct IDs from your HTML
+            const pipsInputSection = document.getElementById('pipsDirectInputContainer');
+            const priceInputSection = document.getElementById('priceBasedInputContainer');
             
+            console.log("Method:", stopLossMethod);
+            console.log("Pips section:", pipsInputSection);
+            console.log("Price section:", priceInputSection);
+
             if (!stopLossMethod || !pipsInputSection || !priceInputSection) {
                 console.error('Some required elements for SL input visibility are missing');
                 return;
             }
 
             if (stopLossMethod === 'pips_direct') {
-                pipsInputSection.style.display = 'block';
+                pipsInputSection.style.display = 'block'; // Changed to 'block' for visibility
                 priceInputSection.style.display = 'none';
-            } else {
+                console.log("Showing pips input");
+            } else if (stopLossMethod === 'price_based') {
                 pipsInputSection.style.display = 'none';
-                priceInputSection.style.display = 'block';
+                priceInputSection.style.display = 'block'; // Changed to 'block' for visibility
+                console.log("Showing price input");
+            }
+
+            // Clear inputs when switching methods
+            if (stopLossMethod === 'pips_direct') {
+                document.getElementById('entryPrice').value = '';
+                document.getElementById('stopLossPrice').value = '';
+                // Hide calculated pips display when switching to direct pips input
+                document.getElementById('calculatedPipsDisplay').style.display = 'none'; 
+            } else {
+                document.getElementById('stopLossPips').value = '';
             }
         }
 
@@ -1571,7 +1641,7 @@
                 calcErrorMessage = calcErrorMessage || "Veuillez entrer un Pourcentage de Risque valide (entre 0.1 et 100).";
             }
             if (isNaN(stopLossPips) || stopLossPips <= 0) {
-                   calcErrorMessage = calcErrorMessage || "Le Stop Loss en Pips n'a pas pu être déterminé. Veuillez vérifier vos entrées.";
+                    calcErrorMessage = calcErrorMessage || "Le Stop Loss en Pips n'a pas pu être déterminé. Veuillez vérifier vos entrées.";
             }
 
             if (calcErrorMessage) {
@@ -2376,30 +2446,9 @@
         }
         
         // --- Calculator helper functions ---
-        function updateSLInputVisibility() {
-            const methodSelect = document.getElementById('stopLossInputMethod');
-            if (!methodSelect) return; // Exit if the select element doesn't exist
-            
-            const method = methodSelect.value;
-            const pipsContainer = document.getElementById('slPipsContainer');
-            const priceContainer = document.getElementById('slPriceContainer');
-            const calculatedPipsDisplay = document.getElementById('calculatedPipsDisplay');
-            
-            // Only proceed if all required elements exist
-            if (pipsContainer && priceContainer && calculatedPipsDisplay) {
-                if (method === 'pips_direct') {
-                    pipsContainer.style.display = 'block';
-                    priceContainer.style.display = 'none';
-                    calculatedPipsDisplay.style.display = 'none';
-                } else { // price_based
-                    pipsContainer.style.display = 'none';
-                    priceContainer.style.display = 'block';
-                    calculatedPipsDisplay.style.display = 'block';
-                }
-            } else {
-                console.warn('Some required elements for SL input visibility are missing');
-            }
-        }
+        // This function was duplicated and had incorrect IDs, removed the duplicate from here.
+        // The one above (line ~550) is the correct one to modify.
+
 
         // --- Custom confirmation modal ---
         function showCustomConfirm(message, onConfirm) {
